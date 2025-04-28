@@ -1,0 +1,26 @@
+allprojects {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+// Set new build directory for root project
+def newBuildDir = rootProject.layout.buildDirectory.dir("../../build").get()
+rootProject.layout.buildDirectory.set(newBuildDir)
+
+// Set new build directory for subprojects
+subprojects {
+    def newSubprojectBuildDir = newBuildDir.dir(project.name)
+    project.layout.buildDirectory.set(newSubprojectBuildDir)
+}
+
+// Ensure subprojects depend on ':app' project evaluation
+subprojects {
+    evaluationDependsOn(':app')
+}
+
+// Clean task
+tasks.register('clean', Delete) {
+    delete rootProject.layout.buildDirectory
+}
