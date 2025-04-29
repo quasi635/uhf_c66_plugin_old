@@ -8,7 +8,7 @@ version = "1.0-SNAPSHOT"
 
 android {
     namespace = "com.clarityrs.c66.uhf_plugin"
-    ndkVersion = "25.2.9519653"
+    ndkVersion = flutter.ndkVersion
     compileSdk = 35
 
 
