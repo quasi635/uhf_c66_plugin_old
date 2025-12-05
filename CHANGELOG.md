@@ -1,3 +1,7 @@
+## 1.0.3
+
+-   Fixed build issue for iOS (not tested with any iOS equipment yet but will try to get this to work with Chainway's R6 device and iOS)
+
 ## 1.0.1
 
 -   Update NDK and Java version in build.gradle

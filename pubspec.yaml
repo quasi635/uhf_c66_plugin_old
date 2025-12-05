@@ -1,6 +1,6 @@
 name: uhf_c66_plugin
 description: 'A flutter plugin for UHF C66 RFID Scanner'
-version: 1.0.1
+version: 1.0.3
 homepage: https://www.claritypointofsale.com
 repository: https://github.com/quasi635/uhf_c66_plugin
 
@@ -39,7 +39,7 @@ flutter:
                 package: com.clarityrs.c66.uhf_plugin
                 pluginClass: UhfPlugin
             ios:
-                pluginClass: UhfPlugin
+                pluginClass: UhfC66Plugin
 
         # To add assets to your plugin package, add an assets section, like this:
         # assets:
