@@ -4,6 +4,7 @@ import 'dart:async';
 import 'package:flutter/services.dart';
 import 'package:uhf_c66_plugin/uhf_c66_plugin.dart';
 import 'package:uhf_c66_plugin/tag_epc.dart';
+import 'package:uhf_c66_plugin/tag_locate.dart';
 
 void main() {
   runApp(const MyApp());
@@ -25,6 +26,32 @@ class _MyAppState extends State<MyApp> {
 
   TextEditingController powerLevelController = TextEditingController(text: "");
   TextEditingController frequencyModeController = TextEditingController(text: "");
+  TextEditingController partialEpcController = TextEditingController(text: "");
+
+  String _partialMatchType = 'startsWith';
+  bool _isLocating = false;
+  bool _isSearchingForMatch = false;
+  bool _continuousSearchRequested = false;
+  List<TagLocate> _locates = [];
+  int? _latestProximityValue;
+  bool _latestProximityValid = false;
+  String _latestProximityEpc = '-';
+  String _latestProximityRssi = '-';
+  int _proximityUpdateCount = 0;
+  int _lastProximityCallbackMs = 0;
+  bool _outOfRangeReported = false;
+
+  StreamSubscription? _connectedSubscription;
+  StreamSubscription? _tagsSubscription;
+  StreamSubscription? _locateSubscription;
+  Timer? _proximityWatchdogTimer;
+
+  static const int _minUiUpdateGapMs = 120;
+  static const int _fixedScanWindowMs = 1500;
+  static const int _proximityTimeoutMs = 1500;
+  int _lastTagsUiUpdateMs = 0;
+  int _lastLocateUiUpdateMs = 0;
+
   @override
   void initState() {
     super.initState();
@@ -51,8 +78,9 @@ class _MyAppState extends State<MyApp> {
     } on PlatformException {
       //platformVersion = 'Failed to get platform version.';
     }
-    UhfC66Plugin.connectedStatusStream.receiveBroadcastStream().listen(updateIsConnected);
-    UhfC66Plugin.tagsStatusStream.receiveBroadcastStream().listen(updateTags);
+    _connectedSubscription = UhfC66Plugin.connectedStatusStream.receiveBroadcastStream().listen(updateIsConnected);
+    _tagsSubscription = UhfC66Plugin.tagsStatusStream.receiveBroadcastStream().listen(updateTags);
+    _locateSubscription = UhfC66Plugin.locateStatusStream.receiveBroadcastStream().listen(updateLocate);
     await UhfC66Plugin.connect();
     await UhfC66Plugin.setFrequencyMode(uhfFrequencyMode);
     await UhfC66Plugin.setPowerLevel(uhfPowerLevel);
@@ -68,16 +96,30 @@ class _MyAppState extends State<MyApp> {
 
   final List<String> _logs = [];
   void log(String msg) {
+    debugPrint('[UHF Demo] $msg');
     setState(() {
       _logs.add(msg);
+      if (_logs.length > 80) {
+        _logs.removeRange(0, _logs.length - 80);
+      }
     });
   }
 
   List<TagEpc> _data = [];
   void updateTags(dynamic result) {
-    log('update tags');
+    final int nowMs = DateTime.now().millisecondsSinceEpoch;
+    if (nowMs - _lastTagsUiUpdateMs < _minUiUpdateGapMs) {
+      return;
+    }
+    _lastTagsUiUpdateMs = nowMs;
+
+    final List<TagEpc> parsed = TagEpc.parseTags(result.toString());
+    if (_sameTags(_data, parsed)) {
+      return;
+    }
+
     setState(() {
-      _data = TagEpc.parseTags(result);
+      _data = parsed;
     });
   }
 
@@ -86,6 +128,164 @@ class _MyAppState extends State<MyApp> {
     //setState(() {
     //_isConnected = isConnected;
     //});
+  }
+
+  void updateLocate(dynamic raw) {
+    if (!_isLocating) {
+      return;
+    }
+
+    final int nowMs = DateTime.now().millisecondsSinceEpoch;
+    if (nowMs - _lastLocateUiUpdateMs < _minUiUpdateGapMs) {
+      return;
+    }
+    _lastLocateUiUpdateMs = nowMs;
+
+    final locate = TagLocate.fromDynamic(raw);
+    if (locate == null) {
+      return;
+    }
+    _lastProximityCallbackMs = nowMs;
+    _outOfRangeReported = false;
+    _proximityUpdateCount += 1;
+    debugPrint(
+      '[UHF PROXIMITY] #$_proximityUpdateCount epc=${locate.epc} proximity=${locate.signalValue} valid=${locate.valid} rssi=${locate.rssi}',
+    );
+    setState(() {
+      _latestProximityValue = locate.signalValue;
+      _latestProximityValid = locate.valid;
+      _latestProximityEpc = locate.epc;
+      _latestProximityRssi = locate.rssi;
+      _locates = [locate, ..._locates.where((TagLocate t) => t.epc != locate.epc)].take(20).toList();
+    });
+  }
+
+  Future<void> _startContinuousFindThenLocate() async {
+    if (_continuousSearchRequested || _isLocating) {
+      return;
+    }
+
+    final String partial = partialEpcController.text.trim();
+    if (partial.isEmpty) {
+      log('Please enter a partial EPC');
+      return;
+    }
+
+    _continuousSearchRequested = true;
+    setState(() {
+      _isSearchingForMatch = true;
+      _isLocating = false;
+      _locates = [];
+      _latestProximityValue = null;
+      _latestProximityValid = false;
+      _latestProximityEpc = '-';
+      _latestProximityRssi = '-';
+      _proximityUpdateCount = 0;
+      _lastProximityCallbackMs = 0;
+      _outOfRangeReported = false;
+    });
+
+    int attempts = 0;
+    log('searching continuously for match...');
+    while (_continuousSearchRequested && mounted && !_isLocating) {
+      attempts++;
+      final bool? started = await UhfC66Plugin.startFindByPartialEpc(
+        partial,
+        matchType: _partialMatchType,
+        scanWindowMs: _fixedScanWindowMs,
+      );
+
+      if (!_continuousSearchRequested || !mounted) {
+        return;
+      }
+
+      if (started == true) {
+        setState(() {
+          _isLocating = true;
+          _isSearchingForMatch = false;
+        });
+        _startProximityWatchdog();
+        log('match found. now locating proximity...');
+        debugPrint('[UHF PROXIMITY] waiting for proximity callbacks...');
+        return;
+      }
+
+      if (attempts % 3 == 0) {
+        log('still searching... (attempt $attempts)');
+      }
+
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+    }
+  }
+
+  Future<void> _stopFindAndLocate() async {
+    _continuousSearchRequested = false;
+    _proximityWatchdogTimer?.cancel();
+    _proximityWatchdogTimer = null;
+    final bool? stopped = await UhfC66Plugin.stopFindByPartialEpc();
+    if (!mounted) {
+      return;
+    }
+    setState(() {
+      _isSearchingForMatch = false;
+      _isLocating = false;
+      _locates = [];
+      _latestProximityValue = null;
+      _latestProximityValid = false;
+      _latestProximityEpc = '-';
+      _latestProximityRssi = '-';
+      _proximityUpdateCount = 0;
+      _lastProximityCallbackMs = 0;
+      _outOfRangeReported = false;
+    });
+    log('stop partial locate: $stopped');
+  }
+
+  void _startProximityWatchdog() {
+    _proximityWatchdogTimer?.cancel();
+    _proximityWatchdogTimer = Timer.periodic(const Duration(milliseconds: 350), (_) {
+      if (!_isLocating || !mounted) {
+        return;
+      }
+      final int nowMs = DateTime.now().millisecondsSinceEpoch;
+      if (_lastProximityCallbackMs == 0 || nowMs - _lastProximityCallbackMs < _proximityTimeoutMs) {
+        return;
+      }
+      if (_outOfRangeReported) {
+        return;
+      }
+
+      _outOfRangeReported = true;
+      debugPrint('[UHF PROXIMITY] timeout/no callback -> forcing proximity=0 (out of range)');
+      setState(() {
+        _latestProximityValue = 0;
+        _latestProximityValid = false;
+      });
+    });
+  }
+
+  bool _sameTags(List<TagEpc> a, List<TagEpc> b) {
+    if (a.length != b.length) {
+      return false;
+    }
+    for (int i = 0; i < a.length; i++) {
+      if (a[i].epc != b[i].epc || a[i].count != b[i].count || a[i].rssi != b[i].rssi) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  @override
+  void dispose() {
+    _proximityWatchdogTimer?.cancel();
+    _connectedSubscription?.cancel();
+    _tagsSubscription?.cancel();
+    _locateSubscription?.cancel();
+    powerLevelController.dispose();
+    frequencyModeController.dispose();
+    partialEpcController.dispose();
+    super.dispose();
   }
 
   @override
@@ -265,11 +465,138 @@ class _MyAppState extends State<MyApp> {
                   ),
                 ],
               ),
+              Card(
+                margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+                child: Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text('Find Item by Partial EPC', style: TextStyle(fontWeight: FontWeight.bold)),
+                      const SizedBox(height: 8),
+                      TextFormField(
+                        controller: partialEpcController,
+                        decoration: const InputDecoration(labelText: 'Partial EPC', hintText: 'Ex: 3008A'),
+                      ),
+                      const SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: DropdownButtonFormField<String>(
+                              value: _partialMatchType,
+                              decoration: const InputDecoration(labelText: 'Match Type'),
+                              items: const [
+                                DropdownMenuItem(value: 'startsWith', child: Text('Starts With')),
+                                DropdownMenuItem(value: 'contains', child: Text('Contains')),
+                                DropdownMenuItem(value: 'endsWith', child: Text('Ends With')),
+                                DropdownMenuItem(value: 'exact', child: Text('Exact')),
+                              ],
+                              onChanged: (String? value) {
+                                if (value == null) return;
+                                setState(() {
+                                  _partialMatchType = value;
+                                });
+                              },
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () async {
+                                await _startContinuousFindThenLocate();
+                              },
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.purple),
+                              child: const Text('Start Search', style: TextStyle(color: Colors.white)),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: ElevatedButton(
+                              onPressed: () async {
+                                await _stopFindAndLocate();
+                              },
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.deepOrange),
+                              child: const Text('Stop Find', style: TextStyle(color: Colors.white)),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      Text(
+                        _isLocating
+                            ? 'Match found. Locating in progress...'
+                            : _isSearchingForMatch
+                            ? 'Searching continuously for match...'
+                            : 'Locating stopped',
+                        style: TextStyle(
+                          color:
+                              _isLocating
+                                  ? Colors.green
+                                  : _isSearchingForMatch
+                                  ? Colors.blue
+                                  : Colors.grey.shade700,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: _latestProximityValid ? Colors.green.shade50 : Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: _latestProximityValid ? Colors.green.shade300 : Colors.grey.shade400,
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text('Proximity Status', style: TextStyle(fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 4),
+                            Text(
+                              _latestProximityValue == null
+                                  ? 'No proximity callback yet'
+                                  : 'Proximity: ${_latestProximityValue!} (0-100)',
+                              style: TextStyle(
+                                fontSize: 16,
+                                color: _latestProximityValid ? Colors.green.shade800 : Colors.grey.shade800,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            Text(
+                              'Valid: $_latestProximityValid | EPC: $_latestProximityEpc | RSSI: $_latestProximityRssi',
+                            ),
+                            Text('Updates: $_proximityUpdateCount'),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
               Container(
                 width: double.infinity,
                 height: 2,
                 margin: const EdgeInsets.symmetric(vertical: 8),
                 color: Colors.blueAccent,
+              ),
+              ..._locates.map(
+                (TagLocate locate) => Card(
+                  color: locate.valid ? Colors.green.shade50 : Colors.orange.shade50,
+                  child: Container(
+                    width: 330,
+                    alignment: Alignment.centerLeft,
+                    padding: const EdgeInsets.all(8.0),
+                    child: Text(
+                      'Locate ${locate.epc} | signal:${locate.signalValue} | valid:${locate.valid} | rssi:${locate.rssi}',
+                      style: TextStyle(color: Colors.blue.shade800),
+                    ),
+                  ),
+                ),
               ),
               ..._data.map(
                 (TagEpc tag) => Card(

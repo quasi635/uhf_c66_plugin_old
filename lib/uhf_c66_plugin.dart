@@ -10,6 +10,7 @@ class UhfC66Plugin {
 
   static const EventChannel connectedStatusStream = EventChannel('ConnectedStatus');
   static const EventChannel tagsStatusStream = EventChannel('TagsStatus');
+  static const EventChannel locateStatusStream = EventChannel('LocateStatus');
 
   static Future<bool?> isStarted() async {
     return _channel.invokeMethod('isStarted');
@@ -65,5 +66,25 @@ class UhfC66Plugin {
 
   static Future<int?> getFrequencyMode() async {
     return _channel.invokeMethod('getFrequencyMode');
+  }
+
+  static Future<bool?> startFindByPartialEpc(
+    String partialEpc, {
+    String matchType = 'startsWith',
+    int scanWindowMs = 1500,
+  }) async {
+    return _channel.invokeMethod('startFindByPartialEpc', <String, dynamic>{
+      'partialEpc': partialEpc,
+      'matchType': matchType,
+      'scanWindowMs': scanWindowMs,
+    });
+  }
+
+  static Future<bool?> stopFindByPartialEpc() async {
+    return _channel.invokeMethod('stopFindByPartialEpc');
+  }
+
+  static Future<bool?> isLocating() async {
+    return _channel.invokeMethod('isLocating');
   }
 }

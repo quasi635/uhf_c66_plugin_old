@@ -40,10 +40,15 @@ public class UhfPlugin implements FlutterPlugin, MethodCallHandler {
     private static final String CHANNEL_GetPowerLevel = "getPowerLevel";
     private static final String CHANNEL_SetFrequencyMode = "setFrequencyMode";
     private static final String CHANNEL_GetFrequencyMode = "getFrequencyMode";
+    private static final String CHANNEL_StartFindByPartialEpc = "startFindByPartialEpc";
+    private static final String CHANNEL_StopFindByPartialEpc = "stopFindByPartialEpc";
+    private static final String CHANNEL_IsLocating = "isLocating";
     private static final String CHANNEL_ConnectedStatus = "ConnectedStatus";
     private static final String CHANNEL_TagsStatus = "TagsStatus";
+    private static final String CHANNEL_LocateStatus = "LocateStatus";
     private static PublishSubject<Boolean> connectedStatus = PublishSubject.create();
     private static PublishSubject<String> tagsStatus = PublishSubject.create();
+    private static PublishSubject<String> locateStatus = PublishSubject.create();
 
 
     @Override
@@ -53,6 +58,7 @@ public class UhfPlugin implements FlutterPlugin, MethodCallHandler {
         final MethodChannel channel = new MethodChannel(flutterPluginBinding.getBinaryMessenger(), "uhf_c66_plugin");
         initConnectedEvent(flutterPluginBinding.getBinaryMessenger());
         initReadEvent(flutterPluginBinding.getBinaryMessenger());
+        initLocateEvent(flutterPluginBinding.getBinaryMessenger());
 
         channel.setMethodCallHandler(this);
         UHFHelper.getInstance(context).init();
@@ -61,6 +67,12 @@ public class UhfPlugin implements FlutterPlugin, MethodCallHandler {
             public void onRead(String tagsJson) {
                 if (tagsJson != null)
                     tagsStatus.onNext(tagsJson);
+            }
+
+            @Override
+            public void onLocate(String locateJson) {
+                if (locateJson != null)
+                    locateStatus.onNext(locateJson);
             }
 
             @Override
@@ -144,6 +156,43 @@ public class UhfPlugin implements FlutterPlugin, MethodCallHandler {
         });
     }
 
+    private static void initLocateEvent(BinaryMessenger messenger) {
+        final EventChannel scannerEventChannel = new EventChannel(messenger, CHANNEL_LocateStatus);
+        scannerEventChannel.setStreamHandler(new EventChannel.StreamHandler() {
+            @Override
+            public void onListen(Object o, final EventChannel.EventSink eventSink) {
+                locateStatus
+                        .subscribeOn(Schedulers.newThread())
+                        .observeOn(AndroidSchedulers.mainThread()).subscribe(new Observer<String>() {
+                            @Override
+                            public void onSubscribe(Disposable d) {
+
+                            }
+
+                            @Override
+                            public void onNext(String locate) {
+                                eventSink.success(locate);
+                            }
+
+                            @Override
+                            public void onError(Throwable e) {
+
+                            }
+
+                            @Override
+                            public void onComplete() {
+
+                            }
+                        });
+            }
+
+            @Override
+            public void onCancel(Object o) {
+
+            }
+        });
+    }
+
     @Override
     public void onMethodCall(@NonNull MethodCall call, @NonNull Result result) {
         handleMethods(call, result);
@@ -201,6 +250,19 @@ public class UhfPlugin implements FlutterPlugin, MethodCallHandler {
                 break;
             case CHANNEL_GetFrequencyMode:
                 result.success(UHFHelper.getInstance(context).getFrequencyMode());
+                break;
+            case CHANNEL_StartFindByPartialEpc:
+                String partialEpc = call.argument("partialEpc");
+                String matchType = call.argument("matchType");
+                Integer scanWindowMs = call.argument("scanWindowMs");
+                result.success(UHFHelper.getInstance(context)
+                        .startFindByPartialEpc(partialEpc, matchType, scanWindowMs == null ? 1500 : scanWindowMs));
+                break;
+            case CHANNEL_StopFindByPartialEpc:
+                result.success(UHFHelper.getInstance(context).stopFindByPartialEpc());
+                break;
+            case CHANNEL_IsLocating:
+                result.success(UHFHelper.getInstance(context).isLocating());
                 break;
             default:
                 result.notImplemented();

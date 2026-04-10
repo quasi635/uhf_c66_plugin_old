@@ -7,14 +7,22 @@ import android.text.TextUtils;
 import android.util.Log;
 
 import com.rscja.deviceapi.RFIDWithUHFUART;
+import com.rscja.deviceapi.entity.TagLocationEntity;
 import com.rscja.deviceapi.entity.UHFTAGInfo;
+import com.rscja.deviceapi.interfaces.ITagLocate;
+import com.rscja.deviceapi.interfaces.ITagLocationCallback;
+import com.rscja.deviceapi.interfaces.IUHFLocationCallback;
 
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 
-import java.io.Console;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 
 
@@ -26,6 +34,9 @@ public class UHFHelper {
     private UHFListener uhfListener;
     private boolean isStart = false;
     private boolean isConnect = false;
+    private boolean isLocating = false;
+    private ITagLocate tagLocate;
+    private final Map<String, String> matchedRssiByEpc = new LinkedHashMap<>();
     // private boolean isSingleRead = false;
     private HashMap<String, EPC> tagList;
 
@@ -116,17 +127,22 @@ public class UHFHelper {
     }
 
     public boolean stop() {
+        boolean hasStopped = false;
         if (isStart && mReader != null) {
             isStart = false;
-            return mReader.stopInventory();
+            hasStopped = mReader.stopInventory();
+        }
+        if (isLocating) {
+            hasStopped = stopFindByPartialEpc() || hasStopped;
         }
         isStart = false;
         clearData();
-        return false;
+        return hasStopped;
     }
 
     public void close() {
         isStart = false;
+        stopFindByPartialEpc();
         if (mReader != null) {
             mReader.free();
             isConnect = false;
@@ -182,6 +198,194 @@ public class UHFHelper {
             return mReader.getFrequencyMode();
         }
         return -1;
+    }
+
+    public boolean startFindByPartialEpc(String partialEpc, String matchType, int scanWindowMs) {
+        if (mReader == null || !isConnect || TextUtils.isEmpty(partialEpc)) {
+            return false;
+        }
+
+        if (isStart) {
+            stop();
+        }
+        stopFindByPartialEpc();
+
+        List<UHFTAGInfo> candidates = collectCandidatesByPartialEpc(partialEpc, matchType, scanWindowMs);
+        if (candidates.isEmpty()) {
+            return false;
+        }
+
+        String targetEpc = pickBestCandidateEpc(candidates);
+        if (!TextUtils.isEmpty(targetEpc)) {
+            boolean startedSingleLocate = mReader.startLocation(context, targetEpc, 1, 32,
+                    new IUHFLocationCallback() {
+                        @Override
+                        public void getLocationValue(int value, boolean valid) {
+                            if (uhfListener == null || !isLocating) {
+                                return;
+                            }
+                            JSONObject json = new JSONObject();
+                            try {
+                                json.put("epc", targetEpc);
+                                json.put("rssi", matchedRssiByEpc.get(targetEpc));
+                                json.put("signalValue", value);
+                                json.put("valid", valid);
+                            } catch (JSONException ignored) {
+                            }
+                            handler.post(() -> uhfListener.onLocate(json.toString()));
+                        }
+                    });
+
+            if (startedSingleLocate) {
+                isLocating = true;
+                return true;
+            }
+        }
+
+        tagLocate = mReader.getTagLocate(context);
+        if (tagLocate == null) {
+            return false;
+        }
+
+        boolean started = tagLocate.startMultiTagsLocate(candidates,
+                new ITagLocationCallback<TagLocationEntity>() {
+                    @Override
+                    public void tagLocationCallback(TagLocationEntity entity) {
+                        if (entity == null || uhfListener == null || !isLocating) {
+                            return;
+                        }
+                        JSONObject json = new JSONObject();
+                        try {
+                            UHFTAGInfo tag = entity.getUhftagInfo();
+                            json.put("epc", tag != null ? tag.getEPC() : "");
+                            json.put("rssi", tag != null ? tag.getRssi() : "");
+                            if (entity.getTagLocationInfo() != null) {
+                                json.put("signalValue", entity.getTagLocationInfo().getSignalValue());
+                                json.put("valid", entity.getTagLocationInfo().isValid());
+                            } else {
+                                json.put("signalValue", 0);
+                                json.put("valid", false);
+                            }
+                        } catch (JSONException ignored) {
+                        }
+                        handler.post(() -> uhfListener.onLocate(json.toString()));
+                    }
+                });
+
+        isLocating = started;
+        return started;
+    }
+
+    public boolean stopFindByPartialEpc() {
+        boolean stopped = false;
+        if (mReader != null) {
+            stopped = mReader.stopLocation() || stopped;
+            stopped = mReader.stopRadarLocation() || stopped;
+        }
+        if (tagLocate != null) {
+            stopped = tagLocate.stopMultiTagsLocate() || stopped;
+        }
+        isLocating = false;
+        tagLocate = null;
+        matchedRssiByEpc.clear();
+        return stopped;
+    }
+
+    public boolean isLocating() {
+        return isLocating;
+    }
+
+    private List<UHFTAGInfo> collectCandidatesByPartialEpc(String partialEpc, String matchType, int scanWindowMs) {
+        List<UHFTAGInfo> matchedTags = new ArrayList<>();
+        Map<String, UHFTAGInfo> uniqueMatches = new LinkedHashMap<>();
+        matchedRssiByEpc.clear();
+
+        int safeScanWindowMs = Math.max(300, scanWindowMs);
+        String safeMatchType = matchType == null ? "startswith" : matchType.toLowerCase(Locale.ROOT);
+
+        if (!mReader.startInventoryTag()) {
+            return matchedTags;
+        }
+
+        long endTime = System.currentTimeMillis() + safeScanWindowMs;
+        try {
+            while (System.currentTimeMillis() < endTime) {
+                UHFTAGInfo scanResult = mReader.readTagFromBuffer();
+                if (scanResult == null || TextUtils.isEmpty(scanResult.getEPC())) {
+                    try {
+                        Thread.sleep(10);
+                    } catch (InterruptedException ignored) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                    continue;
+                }
+
+                String epc = scanResult.getEPC();
+                if (matchesPartial(epc, partialEpc, safeMatchType) && !uniqueMatches.containsKey(epc)) {
+                    UHFTAGInfo locateTarget = new UHFTAGInfo();
+                    locateTarget.setEPC(epc);
+                    uniqueMatches.put(epc, locateTarget);
+                    matchedRssiByEpc.put(epc, scanResult.getRssi());
+                }
+            }
+        } finally {
+            mReader.stopInventory();
+        }
+
+        matchedTags.addAll(uniqueMatches.values());
+        return matchedTags;
+    }
+
+    private String pickBestCandidateEpc(List<UHFTAGInfo> candidates) {
+        String bestEpc = null;
+        int bestRssi = Integer.MIN_VALUE;
+
+        for (UHFTAGInfo tag : candidates) {
+            if (tag == null || TextUtils.isEmpty(tag.getEPC())) {
+                continue;
+            }
+            String epc = tag.getEPC();
+            String rawRssi = matchedRssiByEpc.get(epc);
+            int parsedRssi = parseRssi(rawRssi);
+            if (bestEpc == null || parsedRssi > bestRssi) {
+                bestEpc = epc;
+                bestRssi = parsedRssi;
+            }
+        }
+
+        return bestEpc;
+    }
+
+    private int parseRssi(String rawRssi) {
+        if (TextUtils.isEmpty(rawRssi)) {
+            return Integer.MIN_VALUE;
+        }
+        try {
+            return Integer.parseInt(rawRssi.trim());
+        } catch (Exception ignored) {
+            return Integer.MIN_VALUE;
+        }
+    }
+
+    private boolean matchesPartial(String epc, String partial, String matchType) {
+        if (TextUtils.isEmpty(epc) || TextUtils.isEmpty(partial)) {
+            return false;
+        }
+        String epcNormalized = epc.toLowerCase(Locale.ROOT);
+        String partialNormalized = partial.toLowerCase(Locale.ROOT);
+
+        switch (matchType) {
+            case "contains":
+                return epcNormalized.contains(partialNormalized);
+            case "endswith":
+                return epcNormalized.endsWith(partialNormalized);
+            case "exact":
+                return epcNormalized.equals(partialNormalized);
+            case "startswith":
+            default:
+                return epcNormalized.startsWith(partialNormalized);
+        }
     }
 
     /**
