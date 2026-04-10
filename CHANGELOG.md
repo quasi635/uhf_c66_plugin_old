@@ -1,3 +1,7 @@
+## 1.1.1
+
+- Update README for finder functions
+
 ## 1.1.0
 
 - Added ability to find tag and report proximity
