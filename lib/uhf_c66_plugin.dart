@@ -8,7 +8,9 @@ class UhfC66Plugin {
     return UhfC66PluginPlatform.instance.getPlatformVersion();
   }
 
-  static const EventChannel connectedStatusStream = EventChannel('ConnectedStatus');
+  static const EventChannel connectedStatusStream = EventChannel(
+    'ConnectedStatus',
+  );
   static const EventChannel tagsStatusStream = EventChannel('TagsStatus');
   static const EventChannel locateStatusStream = EventChannel('LocateStatus');
 
@@ -49,11 +51,16 @@ class UhfC66Plugin {
   }
 
   static Future<bool?> writeEpc(String writeData, String accessPwd) async {
-    return _channel.invokeMethod('writeEpc', <String, String>{'writeData': writeData, 'accessPwd': accessPwd});
+    return _channel.invokeMethod('writeEpc', <String, String>{
+      'writeData': writeData,
+      'accessPwd': accessPwd,
+    });
   }
 
   static Future<bool?> setPowerLevel(String value) async {
-    return _channel.invokeMethod('setPowerLevel', <String, String>{'value': value});
+    return _channel.invokeMethod('setPowerLevel', <String, String>{
+      'value': value,
+    });
   }
 
   static Future<int?> getPowerLevel() async {
@@ -61,7 +68,9 @@ class UhfC66Plugin {
   }
 
   static Future<bool?> setFrequencyMode(String value) async {
-    return _channel.invokeMethod('setFrequencyMode', <String, String>{'value': value});
+    return _channel.invokeMethod('setFrequencyMode', <String, String>{
+      'value': value,
+    });
   }
 
   static Future<int?> getFrequencyMode() async {

@@ -5,7 +5,9 @@ import 'package:uhf_c66_plugin/uhf_c66_plugin_method_channel.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:flutter/services.dart';
 
-class MockUhfC66PluginPlatform with MockPlatformInterfaceMixin implements UhfC66PluginPlatform {
+class MockUhfC66PluginPlatform
+    with MockPlatformInterfaceMixin
+    implements UhfC66PluginPlatform {
   @override
   Future<String?> getPlatformVersion() => Future.value('42');
 }
@@ -18,15 +20,15 @@ void main() {
   final UhfC66PluginPlatform initialPlatform = UhfC66PluginPlatform.instance;
 
   setUpAll(() {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, (
-      MethodCall methodCall,
-    ) async {
-      return '42';
-    });
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, (MethodCall methodCall) async {
+          return '42';
+        });
   });
 
   tearDownAll(() {
-    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger.setMockMethodCallHandler(channel, null);
+    TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+        .setMockMethodCallHandler(channel, null);
   });
 
   test('$MethodChannelUhfC66Plugin is the default instance', () {

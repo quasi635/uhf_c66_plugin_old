@@ -6,7 +6,12 @@ class TagLocate {
   final int signalValue;
   final bool valid;
 
-  TagLocate({required this.epc, required this.rssi, required this.signalValue, required this.valid});
+  TagLocate({
+    required this.epc,
+    required this.rssi,
+    required this.signalValue,
+    required this.valid,
+  });
 
   factory TagLocate.fromMap(Map<String, dynamic> json) {
     return TagLocate(
