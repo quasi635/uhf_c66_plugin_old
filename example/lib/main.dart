@@ -17,11 +17,11 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  final _uhfC66Plugin = UhfC66Plugin();
-  String _platformVersion = 'Unknown';
-  final bool _isStarted = false;
-  final bool _isEmptyTags = false;
-  bool _isConnected = false;
+  //final _uhfC66Plugin = UhfC66Plugin();
+  //String _platformVersion = 'Unknown';
+  //final bool _isStarted = false;
+  //final bool _isEmptyTags = false;
+  //bool _isConnected = false;
 
   TextEditingController powerLevelController = TextEditingController(text: "");
   TextEditingController frequencyModeController = TextEditingController(text: "");
@@ -33,7 +33,7 @@ class _MyAppState extends State<MyApp> {
 
   // Platform messages are asynchronous, so we initialize in an async method.
   Future<void> initPlatformState() async {
-    String? platformVersion;
+    //String? platformVersion;
     // Platform messages may fail, so we use a try/catch PlatformException.
 
     String uhfFrequencyMode = (await UhfC66Plugin.getFrequencyMode()).toString();
@@ -47,9 +47,9 @@ class _MyAppState extends State<MyApp> {
     frequencyModeController = TextEditingController(text: uhfFrequencyMode);
 
     try {
-      platformVersion = await _uhfC66Plugin.getPlatformVersion();
+      //platformVersion = await _uhfC66Plugin.getPlatformVersion();
     } on PlatformException {
-      platformVersion = 'Failed to get platform version.';
+      //platformVersion = 'Failed to get platform version.';
     }
     UhfC66Plugin.connectedStatusStream.receiveBroadcastStream().listen(updateIsConnected);
     UhfC66Plugin.tagsStatusStream.receiveBroadcastStream().listen(updateTags);
@@ -62,7 +62,7 @@ class _MyAppState extends State<MyApp> {
     if (!mounted) return;
 
     setState(() {
-      _platformVersion = platformVersion!;
+      //_platformVersion = platformVersion!;
     });
   }
 
@@ -84,7 +84,7 @@ class _MyAppState extends State<MyApp> {
   void updateIsConnected(dynamic isConnected) {
     log('connected $isConnected');
     //setState(() {
-    _isConnected = isConnected;
+    //_isConnected = isConnected;
     //});
   }
 
