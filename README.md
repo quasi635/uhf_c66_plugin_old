@@ -6,82 +6,81 @@ I included the newer API version from Chainway (2025-02-09) and updated the code
 
 ## Getting Started
 
--   Import the library:
+- Import the library:
 
     `import 'package:uhf_c66_plugin/uhf_c66_plugin.dart';`
 
--   Open connection to the UHF reader
+- Open connection to the UHF reader
 
-    `await UhfPlugin.connect();`
+    `await UhfC66Plugin.connect();`
 
--   Check if is the reader connected
+- Check if is the reader connected
 
-    `await UhfPlugin.isConnected();`
+    `await UhfC66Plugin.isConnected();`
 
--   Start reading data a single UHF card
+- Start reading data a single UHF card
 
-    `await UhfPlugin.startSingle();`
+    `await UhfC66Plugin.startSingle();`
 
--   Start reading data multi 'continuous' UHF cards
+- Start reading data multi 'continuous' UHF cards
 
-    `await UhfPlugin.startContinuous();`
+    `await UhfC66Plugin.startContinuous();`
 
--   Is started reading
+- Is started reading
 
-    `await UhfPlugin.isStarted();`
+    `await UhfC66Plugin.isStarted();`
 
--   Stop Reading
+- Stop Reading
 
-    `await UhfPlugin.stop();`
+    `await UhfC66Plugin.stop();`
 
--   Close the connection
+- Close the connection
 
-    `await UhfPlugin.close();`
+    `await UhfC66Plugin.close();`
 
--   Clear cached data for the reader
+- Clear cached data for the reader
 
-    `await UhfPlugin.clearData();`
+    `await UhfC66Plugin.clearData();`
 
--   Is Empty Tags
+- Is Empty Tags
 
-    `await UhfPlugin.isEmptyTags();`
+    `await UhfC66Plugin.isEmptyTags();`
 
--   Write to EPC Tag
+- Write to EPC Tag
 
-    `await UhfPlugin.writeEPC(String writeData, String accessPwd)`
+    `await UhfC66Plugin.writeEpc(String writeData, String accessPwd)`
 
--   Set Power level (1 dBm : 30 dBm use string numbers)
+- Set Power level (1 dBm : 30 dBm use string numbers)
 
-    `await UhfPlugin.setPowerLevel(String level);`
+    `await UhfC66Plugin.setPowerLevel(String level);`
 
--   Get Power level (returns string number, 1-30 dBm)
+- Get Power level (returns string number, 1-30 dBm)
 
-    `await UhfPlugin.getPowerLevel();`
+    `await UhfC66Plugin.getPowerLevel();`
 
--   Set Frequency mode (string number)
+- Set Frequency mode (string number)
+    - 1：China Standard(840~845MHz)
+    - 2：China Standard2(920~925MHz)
+    - 4：Europe Standard(865~868MHz)
+    - 8：USA(902-928MHz)
+    - 22：Korea(917~923MHz)
+    - 50: Japan(952~953MHz)
+    - 51: South Africa(915~919MHz)
+    - 52: China Taiwan
+    - 53: Vietnam(918~923MHz)
+    - 54: Peru(915MHz-928MHz)
+    - 55: Russia( 860MHz-867.6MHz)
+    - 128: Morocco
 
-    -   1：China Standard(840~845MHz)
-    -   2：China Standard2(920~925MHz)
-    -   4：Europe Standard(865~868MHz)
-    -   8：USA(902-928MHz)
-    -   22：Korea(917~923MHz)
-    -   50: Japan(952~953MHz)
-    -   51: South Africa(915~919MHz)
-    -   52: China Taiwan
-    -   53: Vietnam(918~923MHz)
-    -   54: Peru(915MHz-928MHz)
-    -   55: Russia( 860MHz-867.6MHz)
-    -   128: Morocco
+    `await UhfC66Plugin.setFrequencyMode(String area);`
 
-    `await UhfPlugin.setFrequencyMode(String area);`
+- Get Work area (returns string number)
 
--   Get Work area (returns string number)
+    `await UhfC66Plugin.getFrequencyMode();`
 
-    `await UhfPlugin.getFrequencyMode();`
+- Listen to tags status
 
--   Listen to tags status
-
-    `UhfPlugin.tagsStatusStream.receiveBroadcastStream().listen(updateTags);`
+    `UhfC66Plugin.tagsStatusStream.receiveBroadcastStream().listen(updateTags);`
 
     ```dart
        List<TagEpc> _data = [];
@@ -91,3 +90,40 @@ I included the newer API version from Chainway (2025-02-09) and updated the code
          });
        }
     ```
+
+## Finder Functions (Partial EPC Locate)
+
+Use these methods to continuously search for a tag using a partial EPC, then start proximity locate when a match is found.
+
+- Start find by partial EPC
+
+        `await UhfC66Plugin.startFindByPartialEpc('3008A', matchType: 'startsWith', scanWindowMs: 1500);`
+
+        Parameters:
+
+        -   `partialEpc`: required partial EPC string.
+        -   `matchType`: one of `startsWith`, `contains`, `endsWith`, `exact`.
+        -   `scanWindowMs`: scan duration in milliseconds for each find attempt.
+
+- Stop partial EPC find/locate
+
+        `await UhfC66Plugin.stopFindByPartialEpc();`
+
+- Check locate state
+
+        `await UhfC66Plugin.isLocating();`
+
+- Listen to locate/proximity status stream
+
+        `UhfC66Plugin.locateStatusStream.receiveBroadcastStream().listen(updateLocate);`
+
+        ```dart
+        void updateLocate(dynamic raw) {
+            final locate = TagLocate.fromDynamic(raw);
+            if (locate == null) return;
+
+            debugPrint(
+                'epc=${locate.epc} proximity=${locate.signalValue} valid=${locate.valid} rssi=${locate.rssi}',
+            );
+        }
+        ```
