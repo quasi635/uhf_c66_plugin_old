@@ -25,9 +25,7 @@ class _MyAppState extends State<MyApp> {
   //bool _isConnected = false;
 
   TextEditingController powerLevelController = TextEditingController(text: "");
-  TextEditingController frequencyModeController = TextEditingController(
-    text: "",
-  );
+  TextEditingController frequencyModeController = TextEditingController(text: "");
   TextEditingController partialEpcController = TextEditingController(text: "");
 
   String _partialMatchType = 'startsWith';
@@ -46,6 +44,7 @@ class _MyAppState extends State<MyApp> {
   StreamSubscription? _connectedSubscription;
   StreamSubscription? _tagsSubscription;
   StreamSubscription? _locateSubscription;
+  StreamSubscription? _barcodeSubscription;
   Timer? _proximityWatchdogTimer;
 
   static const int _minUiUpdateGapMs = 120;
@@ -57,6 +56,32 @@ class _MyAppState extends State<MyApp> {
   @override
   void initState() {
     super.initState();
+    UhfC66Plugin.enableTriggerScanning();
+
+    UhfC66Plugin.sideKeyEvents.listen((UhfSideKeyEvent e) {
+      if (!e.isDown) return;
+      if (e.key == UhfSideKey.left) {
+        log('Left yellow button: calling startBarcodeScan');
+        UhfC66Plugin.startBarcodeScan().then((bool? ok) {
+          log('startBarcodeScan returned $ok');
+        });
+      } else {
+        log('Right yellow button: calling stopBarcodeScan');
+        UhfC66Plugin.stopBarcodeScan().then((bool? ok) {
+          log('stopBarcodeScan returned $ok');
+        });
+      }
+    });
+
+    _barcodeSubscription = UhfC66Plugin.barcodeEvents.listen((r) {
+      debugPrint('[BARCODE] resultCode=${r.resultCode} data=${r.data}');
+      if (r.isSuccess) {
+        log('Barcode: ${r.data}');
+      } else {
+        log('Barcode scan ended (code=${r.resultCode})');
+      }
+    });
+
     initPlatformState();
   }
 
@@ -65,17 +90,12 @@ class _MyAppState extends State<MyApp> {
     //String? platformVersion;
     // Platform messages may fail, so we use a try/catch PlatformException.
 
-    String uhfFrequencyMode =
-        (await UhfC66Plugin.getFrequencyMode()).toString();
+    String uhfFrequencyMode = (await UhfC66Plugin.getFrequencyMode()).toString();
     String uhfPowerLevel = (await UhfC66Plugin.getPowerLevel()).toString();
 
     //String uhfFrequencyMode = "8"; // 0x08 for USA (902-928MHz)
-    uhfFrequencyMode =
-        uhfFrequencyMode == "-1" ? "8" : uhfFrequencyMode; // Default to US
-    uhfPowerLevel =
-        uhfPowerLevel == "-1"
-            ? "20"
-            : uhfPowerLevel; // Range 5-30 - Default to Medium Power
+    uhfFrequencyMode = uhfFrequencyMode == "-1" ? "8" : uhfFrequencyMode; // Default to US
+    uhfPowerLevel = uhfPowerLevel == "-1" ? "20" : uhfPowerLevel; // Range 5-30 - Default to Medium Power
 
     powerLevelController = TextEditingController(text: uhfPowerLevel);
     frequencyModeController = TextEditingController(text: uhfFrequencyMode);
@@ -85,15 +105,9 @@ class _MyAppState extends State<MyApp> {
     } on PlatformException {
       //platformVersion = 'Failed to get platform version.';
     }
-    _connectedSubscription = UhfC66Plugin.connectedStatusStream
-        .receiveBroadcastStream()
-        .listen(updateIsConnected);
-    _tagsSubscription = UhfC66Plugin.tagsStatusStream
-        .receiveBroadcastStream()
-        .listen(updateTags);
-    _locateSubscription = UhfC66Plugin.locateStatusStream
-        .receiveBroadcastStream()
-        .listen(updateLocate);
+    _connectedSubscription = UhfC66Plugin.connectedStatusStream.receiveBroadcastStream().listen(updateIsConnected);
+    _tagsSubscription = UhfC66Plugin.tagsStatusStream.receiveBroadcastStream().listen(updateTags);
+    _locateSubscription = UhfC66Plugin.locateStatusStream.receiveBroadcastStream().listen(updateLocate);
     await UhfC66Plugin.connect();
     await UhfC66Plugin.setFrequencyMode(uhfFrequencyMode);
     await UhfC66Plugin.setPowerLevel(uhfPowerLevel);
@@ -169,11 +183,7 @@ class _MyAppState extends State<MyApp> {
       _latestProximityValid = locate.valid;
       _latestProximityEpc = locate.epc;
       _latestProximityRssi = locate.rssi;
-      _locates =
-          [
-            locate,
-            ..._locates.where((TagLocate t) => t.epc != locate.epc),
-          ].take(20).toList();
+      _locates = [locate, ..._locates.where((TagLocate t) => t.epc != locate.epc)].take(20).toList();
     });
   }
 
@@ -260,15 +270,12 @@ class _MyAppState extends State<MyApp> {
 
   void _startProximityWatchdog() {
     _proximityWatchdogTimer?.cancel();
-    _proximityWatchdogTimer = Timer.periodic(const Duration(milliseconds: 350), (
-      _,
-    ) {
+    _proximityWatchdogTimer = Timer.periodic(const Duration(milliseconds: 350), (_) {
       if (!_isLocating || !mounted) {
         return;
       }
       final int nowMs = DateTime.now().millisecondsSinceEpoch;
-      if (_lastProximityCallbackMs == 0 ||
-          nowMs - _lastProximityCallbackMs < _proximityTimeoutMs) {
+      if (_lastProximityCallbackMs == 0 || nowMs - _lastProximityCallbackMs < _proximityTimeoutMs) {
         return;
       }
       if (_outOfRangeReported) {
@@ -276,9 +283,7 @@ class _MyAppState extends State<MyApp> {
       }
 
       _outOfRangeReported = true;
-      debugPrint(
-        '[UHF PROXIMITY] timeout/no callback -> forcing proximity=0 (out of range)',
-      );
+      debugPrint('[UHF PROXIMITY] timeout/no callback -> forcing proximity=0 (out of range)');
       setState(() {
         _latestProximityValue = 0;
         _latestProximityValid = false;
@@ -291,9 +296,7 @@ class _MyAppState extends State<MyApp> {
       return false;
     }
     for (int i = 0; i < a.length; i++) {
-      if (a[i].epc != b[i].epc ||
-          a[i].count != b[i].count ||
-          a[i].rssi != b[i].rssi) {
+      if (a[i].epc != b[i].epc || a[i].count != b[i].count || a[i].rssi != b[i].rssi) {
         return false;
       }
     }
@@ -306,6 +309,7 @@ class _MyAppState extends State<MyApp> {
     _connectedSubscription?.cancel();
     _tagsSubscription?.cancel();
     _locateSubscription?.cancel();
+    _barcodeSubscription?.cancel();
     powerLevelController.dispose();
     frequencyModeController.dispose();
     partialEpcController.dispose();
@@ -362,26 +366,16 @@ class _MyAppState extends State<MyApp> {
                       bool? isStarted = await UhfC66Plugin.startSingle();
                       log('Start single $isStarted');
                     },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blueAccent,
-                    ),
-                    child: const Text(
-                      'Start Single',
-                      style: TextStyle(color: Colors.white),
-                    ),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+                    child: const Text('Start Single', style: TextStyle(color: Colors.white)),
                   ),
                   ElevatedButton(
                     onPressed: () async {
                       bool? isStarted = await UhfC66Plugin.startContinuous();
                       log('Start Continuous $isStarted');
                     },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blueAccent,
-                    ),
-                    child: const Text(
-                      'Start Continuous Reading',
-                      style: TextStyle(color: Colors.white),
-                    ),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+                    child: const Text('Start Continuous Reading', style: TextStyle(color: Colors.white)),
                   ),
                   /* RaisedButton(
                       child: Text('Call isStarted'),
@@ -405,13 +399,8 @@ class _MyAppState extends State<MyApp> {
                   bool? isStopped = await UhfC66Plugin.stop();
                   log('Stop $isStopped');
                 },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.redAccent,
-                ),
-                child: const Text(
-                  'Call Stop',
-                  style: TextStyle(color: Colors.white),
-                ),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
+                child: const Text('Call Stop', style: TextStyle(color: Colors.white)),
               ),
               /*   RaisedButton(
                       child: Text('Call Close'),
@@ -430,13 +419,8 @@ class _MyAppState extends State<MyApp> {
                     _data = [];
                   });
                 },
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.blueAccent,
-                ),
-                child: const Text(
-                  'Call Clear Data',
-                  style: TextStyle(color: Colors.white),
-                ),
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.blueAccent),
+                child: const Text('Call Clear Data', style: TextStyle(color: Colors.white)),
               ),
               Visibility(
                 visible: true,
@@ -444,19 +428,11 @@ class _MyAppState extends State<MyApp> {
                   onPressed: () async {
                     String accessPwd = "000000000000";
                     String epcData = "112233445566778899101112";
-                    bool? isWritten = await UhfC66Plugin.writeEpc(
-                      epcData,
-                      accessPwd,
-                    );
+                    bool? isWritten = await UhfC66Plugin.writeEpc(epcData, accessPwd);
                     log('Written $isWritten');
                   },
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.orange,
-                  ),
-                  child: const Text(
-                    'Write EPC',
-                    style: TextStyle(color: Colors.white),
-                  ),
+                  style: ElevatedButton.styleFrom(backgroundColor: Colors.orange),
+                  child: const Text('Write EPC', style: TextStyle(color: Colors.white)),
                 ),
               ),
               /* RaisedButton(
@@ -482,25 +458,16 @@ class _MyAppState extends State<MyApp> {
                       controller: powerLevelController,
                       keyboardType: TextInputType.number,
                       textAlign: TextAlign.center,
-                      decoration: const InputDecoration(
-                        labelText: 'Power Level 5-30',
-                      ),
+                      decoration: const InputDecoration(labelText: 'Power Level 5-30'),
                     ),
                   ),
                   ElevatedButton(
                     onPressed: () async {
-                      bool? isSetPower = await UhfC66Plugin.setPowerLevel(
-                        powerLevelController.text,
-                      );
+                      bool? isSetPower = await UhfC66Plugin.setPowerLevel(powerLevelController.text);
                       log('isSetPower $isSetPower');
                     },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                    ),
-                    child: const Text(
-                      'Set Power Level',
-                      style: TextStyle(color: Colors.white),
-                    ),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                    child: const Text('Set Power Level', style: TextStyle(color: Colors.white)),
                   ),
                 ],
               ),
@@ -513,50 +480,31 @@ class _MyAppState extends State<MyApp> {
                       controller: frequencyModeController,
                       keyboardType: TextInputType.number,
                       textAlign: TextAlign.center,
-                      decoration: const InputDecoration(
-                        labelText: 'Frequency Mode',
-                      ),
+                      decoration: const InputDecoration(labelText: 'Frequency Mode'),
                     ),
                   ),
                   ElevatedButton(
                     onPressed: () async {
-                      bool? isSetFrequencyMode =
-                          await UhfC66Plugin.setFrequencyMode(
-                            frequencyModeController.text,
-                          );
+                      bool? isSetFrequencyMode = await UhfC66Plugin.setFrequencyMode(frequencyModeController.text);
                       log('isSetFrequencyMode $isSetFrequencyMode');
                     },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.green,
-                    ),
-                    child: const Text(
-                      'Set Work Area',
-                      style: TextStyle(color: Colors.white),
-                    ),
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
+                    child: const Text('Set Work Area', style: TextStyle(color: Colors.white)),
                   ),
                 ],
               ),
               Card(
-                margin: const EdgeInsets.symmetric(
-                  vertical: 10,
-                  horizontal: 12,
-                ),
+                margin: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
                 child: Padding(
                   padding: const EdgeInsets.all(12),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        'Find Item by Partial EPC',
-                        style: TextStyle(fontWeight: FontWeight.bold),
-                      ),
+                      const Text('Find Item by Partial EPC', style: TextStyle(fontWeight: FontWeight.bold)),
                       const SizedBox(height: 8),
                       TextFormField(
                         controller: partialEpcController,
-                        decoration: const InputDecoration(
-                          labelText: 'Partial EPC',
-                          hintText: 'Ex: 3008A',
-                        ),
+                        decoration: const InputDecoration(labelText: 'Partial EPC', hintText: 'Ex: 3008A'),
                       ),
                       const SizedBox(height: 8),
                       Row(
@@ -564,26 +512,12 @@ class _MyAppState extends State<MyApp> {
                           Expanded(
                             child: DropdownButtonFormField<String>(
                               value: _partialMatchType,
-                              decoration: const InputDecoration(
-                                labelText: 'Match Type',
-                              ),
+                              decoration: const InputDecoration(labelText: 'Match Type'),
                               items: const [
-                                DropdownMenuItem(
-                                  value: 'startsWith',
-                                  child: Text('Starts With'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'contains',
-                                  child: Text('Contains'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'endsWith',
-                                  child: Text('Ends With'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'exact',
-                                  child: Text('Exact'),
-                                ),
+                                DropdownMenuItem(value: 'startsWith', child: Text('Starts With')),
+                                DropdownMenuItem(value: 'contains', child: Text('Contains')),
+                                DropdownMenuItem(value: 'endsWith', child: Text('Ends With')),
+                                DropdownMenuItem(value: 'exact', child: Text('Exact')),
                               ],
                               onChanged: (String? value) {
                                 if (value == null) return;
@@ -603,13 +537,8 @@ class _MyAppState extends State<MyApp> {
                               onPressed: () async {
                                 await _startContinuousFindThenLocate();
                               },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.purple,
-                              ),
-                              child: const Text(
-                                'Start Search',
-                                style: TextStyle(color: Colors.white),
-                              ),
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.purple),
+                              child: const Text('Start Search', style: TextStyle(color: Colors.white)),
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -618,13 +547,8 @@ class _MyAppState extends State<MyApp> {
                               onPressed: () async {
                                 await _stopFindAndLocate();
                               },
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: Colors.deepOrange,
-                              ),
-                              child: const Text(
-                                'Stop Find',
-                                style: TextStyle(color: Colors.white),
-                              ),
+                              style: ElevatedButton.styleFrom(backgroundColor: Colors.deepOrange),
+                              child: const Text('Stop Find', style: TextStyle(color: Colors.white)),
                             ),
                           ),
                         ],
@@ -650,25 +574,16 @@ class _MyAppState extends State<MyApp> {
                         width: double.infinity,
                         padding: const EdgeInsets.all(10),
                         decoration: BoxDecoration(
-                          color:
-                              _latestProximityValid
-                                  ? Colors.green.shade50
-                                  : Colors.grey.shade100,
+                          color: _latestProximityValid ? Colors.green.shade50 : Colors.grey.shade100,
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(
-                            color:
-                                _latestProximityValid
-                                    ? Colors.green.shade300
-                                    : Colors.grey.shade400,
+                            color: _latestProximityValid ? Colors.green.shade300 : Colors.grey.shade400,
                           ),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text(
-                              'Proximity Status',
-                              style: TextStyle(fontWeight: FontWeight.bold),
-                            ),
+                            const Text('Proximity Status', style: TextStyle(fontWeight: FontWeight.bold)),
                             const SizedBox(height: 4),
                             Text(
                               _latestProximityValue == null
@@ -676,10 +591,7 @@ class _MyAppState extends State<MyApp> {
                                   : 'Proximity: ${_latestProximityValue!} (0-100)',
                               style: TextStyle(
                                 fontSize: 16,
-                                color:
-                                    _latestProximityValid
-                                        ? Colors.green.shade800
-                                        : Colors.grey.shade800,
+                                color: _latestProximityValid ? Colors.green.shade800 : Colors.grey.shade800,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
@@ -702,10 +614,7 @@ class _MyAppState extends State<MyApp> {
               ),
               ..._locates.map(
                 (TagLocate locate) => Card(
-                  color:
-                      locate.valid
-                          ? Colors.green.shade50
-                          : Colors.orange.shade50,
+                  color: locate.valid ? Colors.green.shade50 : Colors.orange.shade50,
                   child: Container(
                     width: 330,
                     alignment: Alignment.centerLeft,
@@ -724,10 +633,7 @@ class _MyAppState extends State<MyApp> {
                     width: 330,
                     alignment: Alignment.center,
                     padding: const EdgeInsets.all(8.0),
-                    child: Text(
-                      'Tag ${tag.epc} Count:${tag.count}',
-                      style: TextStyle(color: Colors.blue.shade800),
-                    ),
+                    child: Text('Tag ${tag.epc} Count:${tag.count}', style: TextStyle(color: Colors.blue.shade800)),
                   ),
                 ),
               ),
@@ -738,10 +644,7 @@ class _MyAppState extends State<MyApp> {
                     width: 330,
                     alignment: Alignment.center,
                     padding: const EdgeInsets.all(8.0),
-                    child: Text(
-                      'Log: $msg',
-                      style: TextStyle(color: Colors.blue.shade800),
-                    ),
+                    child: Text('Log: $msg', style: TextStyle(color: Colors.blue.shade800)),
                   ),
                 ),
               ),

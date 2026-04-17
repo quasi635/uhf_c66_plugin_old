@@ -1,3 +1,16 @@
+## 1.3.1
+
+- Auto reconnect to RFID equipment if it fails to the first time
+
+## 1.3.0
+
+- Add ability to capture barcode scans from 2D sensor
+
+## 1.2.0
+
+- Add ability to listen to trigger and left/right yellow buttons on C66 device
+- Trigger button will toggle start/stop continuous scans on each press
+
 ## 1.1.1
 
 - Update README for finder functions

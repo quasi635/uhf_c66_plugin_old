@@ -36,6 +36,8 @@ public class UHFHelper {
     private boolean isConnect = false;
     private boolean isLocating = false;
     private ITagLocate tagLocate;
+    private String lastPowerLevel;
+    private String lastFrequencyMode;
     private final Map<String, String> matchedRssiByEpc = new LinkedHashMap<>();
     // private boolean isSingleRead = false;
     private HashMap<String, EPC> tagList;
@@ -110,13 +112,22 @@ public class UHFHelper {
                 }
             } else {// Auto read multi .startInventoryTag((byte) 0, (byte) 0))
                 // mContext.mReader.setEPCTIDMode(true);
-                if (mReader.startInventoryTag()) {
+                if (mReader != null && mReader.startInventoryTag()) {
                     isStart = true;
                     new TagThread().start();
                     return true;
-                } else {
-                    return false;
                 }
+                // startInventoryTag() returns false when the underlying UHF
+                // module has been powered off — typically because another
+                // process (or a hot-restarted copy of ours) constructed a
+                // second UhfBase and broadcast UHF_POWER_OFF at us. Try once
+                // to recover by freeing + re-init'ing the reader.
+                if (reconnect() && mReader != null && mReader.startInventoryTag()) {
+                    isStart = true;
+                    new TagThread().start();
+                    return true;
+                }
+                return false;
             }
         }
         return true;
@@ -160,7 +171,9 @@ public class UHFHelper {
     public boolean setPowerLevel(String level) {
         // 1-30 dBm
         if (mReader != null) {
-            return mReader.setPower(Integer.parseInt(level));
+            boolean ok = mReader.setPower(Integer.parseInt(level));
+            if (ok) lastPowerLevel = level;
+            return ok;
         }
         return false;
     }
@@ -188,9 +201,75 @@ public class UHFHelper {
          * 0x80 Morocco
          */
 
-        if (mReader != null)
-            return mReader.setFrequencyMode(Integer.parseInt(area));
+        if (mReader != null) {
+            boolean ok = mReader.setFrequencyMode(Integer.parseInt(area));
+            if (ok) lastFrequencyMode = area;
+            return ok;
+        }
         return false;
+    }
+
+    /**
+     * Free and re-initialize the UHF reader. Use this to recover from a
+     * UHF_POWER_OFF broadcast — either from a hot-restart that left a second
+     * UhfBase alive, or from another UHF-using app on the device. Re-applies
+     * the last power level / frequency mode set through this helper so callers
+     * don't have to remember them.
+     *
+     * @return true if the reader came back up.
+     */
+    public boolean reconnect() {
+        try {
+            if (isStart && mReader != null) {
+                mReader.stopInventory();
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            stopFindByPartialEpc();
+        } catch (Throwable ignored) {
+        }
+        isStart = false;
+        isLocating = false;
+
+        if (mReader != null) {
+            try {
+                mReader.free();
+            } catch (Throwable ignored) {
+            }
+        }
+        mReader = null;
+        isConnect = false;
+
+        try {
+            mReader = RFIDWithUHFUART.getInstance();
+        } catch (Exception ex) {
+            if (uhfListener != null) uhfListener.onConnect(false, 0);
+            return false;
+        }
+        if (mReader == null) {
+            if (uhfListener != null) uhfListener.onConnect(false, 0);
+            return false;
+        }
+
+        isConnect = mReader.init(context);
+        if (uhfListener != null) uhfListener.onConnect(isConnect, 0);
+
+        if (isConnect) {
+            if (lastFrequencyMode != null) {
+                try {
+                    mReader.setFrequencyMode(Integer.parseInt(lastFrequencyMode));
+                } catch (Throwable ignored) {
+                }
+            }
+            if (lastPowerLevel != null) {
+                try {
+                    mReader.setPower(Integer.parseInt(lastPowerLevel));
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        return isConnect;
     }
 
     public Integer getFrequencyMode() {
