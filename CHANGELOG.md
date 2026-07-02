@@ -1,3 +1,10 @@
+## 1.4.0
+
+- Fixed `startFindByPartialEpc` blocking the platform thread for the whole scan window, causing dropped UI frames
+- Fixed EventChannel listeners continuing to push messages after the Flutter engine detaches, causing FlutterJNI warnings
+- Migrated off the deprecated `readTagFromBuffer()` polling API to the RFID SDK's push-based inventory callback
+- Updated homepage URL
+
 ## 1.3.1
 
 - Auto reconnect to RFID equipment if it fails to the first time

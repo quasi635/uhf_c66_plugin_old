@@ -2,7 +2,6 @@ package com.clarityrs.c66.uhf_plugin.helper;
 
 import android.content.Context;
 import android.os.Handler;
-import android.os.Message;
 import android.text.TextUtils;
 import android.util.Log;
 
@@ -11,6 +10,7 @@ import com.rscja.deviceapi.entity.TagLocationEntity;
 import com.rscja.deviceapi.entity.UHFTAGInfo;
 import com.rscja.deviceapi.interfaces.ITagLocate;
 import com.rscja.deviceapi.interfaces.ITagLocationCallback;
+import com.rscja.deviceapi.interfaces.IUHFInventoryCallback;
 import com.rscja.deviceapi.interfaces.IUHFLocationCallback;
 
 import org.json.JSONArray;
@@ -41,6 +41,13 @@ public class UHFHelper {
     private final Map<String, String> matchedRssiByEpc = new LinkedHashMap<>();
     // private boolean isSingleRead = false;
     private HashMap<String, EPC> tagList;
+    private IUHFInventoryCallback inventoryCallback;
+    // Non-null only while collectCandidatesByPartialEpc's scan window is open;
+    // read from the inventory callback (see onTagRead) to decide whether an
+    // incoming tag belongs to a partial-EPC locate scan instead of a
+    // continuous read. Set/cleared on the scan's own background thread,
+    // read on whatever thread the vendor SDK invokes the callback from.
+    private volatile PartialEpcScanSession partialEpcScanSession;
 
     private UHFHelper(Context context) {
         this.context = context;
@@ -69,15 +76,75 @@ public class UHFHelper {
         // this.uhfListener = uhfListener;
         tagList = new HashMap<>();
         clearData();
-        handler = new Handler(context.getMainLooper()) {
-            @Override
-            public void handleMessage(Message msg) {
-                String result = msg.obj + "";
-                String[] strs = result.split("@");
-                addEPCToList(strs[0], strs[1]);
-            }
-        };
+        handler = new Handler(context.getMainLooper());
+    }
 
+    /**
+     * Registers the reader's push-based tag callback, replacing the
+     * deprecated readTagFromBuffer() polling loop. Safe to call repeatedly
+     * (e.g. from both connect() and reconnect()) since it just re-attaches
+     * the same callback instance to whatever mReader currently is.
+     */
+    private void installInventoryCallback() {
+        if (mReader == null) {
+            return;
+        }
+        if (inventoryCallback == null) {
+            inventoryCallback = this::onTagRead;
+        }
+        mReader.setInventoryCallback(inventoryCallback);
+    }
+
+    /**
+     * Fires for every tag read while an inventory session is active. Both
+     * continuous multi-tag reading (start(false)) and the partial-EPC locate
+     * scan (collectCandidatesByPartialEpc) start that session via
+     * startInventoryTag(), so route based on whichever mode is currently
+     * active rather than needing two separate reader threads.
+     */
+    private void onTagRead(UHFTAGInfo tag) {
+        if (tag == null || TextUtils.isEmpty(tag.getEPC())) {
+            return;
+        }
+
+        PartialEpcScanSession session = partialEpcScanSession;
+        if (session != null) {
+            String epc = tag.getEPC();
+            if (matchesPartial(epc, session.partialEpc, session.matchType)) {
+                synchronized (session) {
+                    if (!session.uniqueMatches.containsKey(epc)) {
+                        UHFTAGInfo locateTarget = new UHFTAGInfo();
+                        locateTarget.setEPC(epc);
+                        session.uniqueMatches.put(epc, locateTarget);
+                        session.rssiByEpc.put(epc, tag.getRssi());
+                    }
+                }
+            }
+            return;
+        }
+
+        if (!isStart) {
+            return;
+        }
+
+        String strTid = tag.getTid();
+        String strResult;
+        if (strTid.length() != 0 && !strTid.equals("0000000000000000")
+                && !strTid.equals("000000000000000000000000")) {
+            strResult = "TID:" + strTid + "\n";
+        } else {
+            strResult = "";
+        }
+        Log.i("data", "c" + tag.getEPC() + "|" + strResult);
+
+        final String epcField = strResult + "EPC:" + tag.getEPC();
+        final String rssi = tag.getRssi();
+        // Continuous-read path: just record the tag. The periodic emitLoop
+        // batches the (potentially expensive) JSON snapshot instead of
+        // rebuilding/serializing the whole list on every single tag read,
+        // which used to flood the main thread and could delay/block the
+        // "stop" method-channel call.
+        handler.post(() -> addEPCToList(epcField, rssi, false));
     }
 
     public boolean connect() {
@@ -90,6 +157,7 @@ public class UHFHelper {
 
         if (mReader != null) {
             isConnect = mReader.init(context);
+            installInventoryCallback();
             // mReader.setFrequencyMode(2);
             // mReader.setPower(29);
             uhfListener.onConnect(isConnect, 0);
@@ -105,7 +173,7 @@ public class UHFHelper {
                 UHFTAGInfo strUII = mReader.inventorySingleTag();
                 if (strUII != null) {
                     String strEPC = strUII.getEPC();
-                    addEPCToList(strEPC, strUII.getRssi());
+                    addEPCToList(strEPC, strUII.getRssi(), true);
                     return true;
                 } else {
                     return false;
@@ -114,7 +182,7 @@ public class UHFHelper {
                 // mContext.mReader.setEPCTIDMode(true);
                 if (mReader != null && mReader.startInventoryTag()) {
                     isStart = true;
-                    new TagThread().start();
+                    handler.post(emitLoop);
                     return true;
                 }
                 // startInventoryTag() returns false when the underlying UHF
@@ -124,7 +192,7 @@ public class UHFHelper {
                 // to recover by freeing + re-init'ing the reader.
                 if (reconnect() && mReader != null && mReader.startInventoryTag()) {
                     isStart = true;
-                    new TagThread().start();
+                    handler.post(emitLoop);
                     return true;
                 }
                 return false;
@@ -147,12 +215,18 @@ public class UHFHelper {
             hasStopped = stopFindByPartialEpc() || hasStopped;
         }
         isStart = false;
+        handler.removeCallbacks(emitLoop);
+        // Flush any tags read since the last batch so the caller sees the
+        // final state before we clear it, rather than silently dropping
+        // whichever reads landed in the last (<EMIT_INTERVAL_MS) window.
+        emitTagListIfDirty();
         clearData();
         return hasStopped;
     }
 
     public void close() {
         isStart = false;
+        handler.removeCallbacks(emitLoop);
         stopFindByPartialEpc();
         if (mReader != null) {
             mReader.free();
@@ -253,6 +327,7 @@ public class UHFHelper {
         }
 
         isConnect = mReader.init(context);
+        installInventoryCallback();
         if (uhfListener != null) uhfListener.onConnect(isConnect, 0);
 
         if (isConnect) {
@@ -279,9 +354,22 @@ public class UHFHelper {
         return -1;
     }
 
-    public boolean startFindByPartialEpc(String partialEpc, String matchType, int scanWindowMs) {
+    public interface FindByPartialEpcCallback {
+        void onResult(boolean started);
+    }
+
+    /**
+     * Runs the scan on a background thread and delivers the result via
+     * callback on the main looper. collectCandidatesByPartialEpc blocks for
+     * at least scanWindowMs (default 1500ms); doing that on the caller's
+     * thread (the platform/UI thread, for MethodChannel callers) drops
+     * frames, so the whole lookup+locate sequence is offloaded here.
+     */
+    public void startFindByPartialEpc(String partialEpc, String matchType, int scanWindowMs,
+                                       FindByPartialEpcCallback callback) {
         if (mReader == null || !isConnect || TextUtils.isEmpty(partialEpc)) {
-            return false;
+            callback.onResult(false);
+            return;
         }
 
         if (isStart) {
@@ -289,6 +377,13 @@ public class UHFHelper {
         }
         stopFindByPartialEpc();
 
+        new Thread(() -> {
+            boolean started = doStartFindByPartialEpc(partialEpc, matchType, scanWindowMs);
+            handler.post(() -> callback.onResult(started));
+        }).start();
+    }
+
+    private boolean doStartFindByPartialEpc(String partialEpc, String matchType, int scanWindowMs) {
         List<UHFTAGInfo> candidates = collectCandidatesByPartialEpc(partialEpc, matchType, scanWindowMs);
         if (candidates.isEmpty()) {
             return false;
@@ -376,7 +471,6 @@ public class UHFHelper {
 
     private List<UHFTAGInfo> collectCandidatesByPartialEpc(String partialEpc, String matchType, int scanWindowMs) {
         List<UHFTAGInfo> matchedTags = new ArrayList<>();
-        Map<String, UHFTAGInfo> uniqueMatches = new LinkedHashMap<>();
         matchedRssiByEpc.clear();
 
         int safeScanWindowMs = Math.max(300, scanWindowMs);
@@ -386,34 +480,38 @@ public class UHFHelper {
             return matchedTags;
         }
 
-        long endTime = System.currentTimeMillis() + safeScanWindowMs;
+        // Matches accumulate via onTagRead (the shared IUHFInventoryCallback)
+        // instead of polling readTagFromBuffer(); just hold the scan window
+        // open for safeScanWindowMs and let the callback populate the session.
+        PartialEpcScanSession session = new PartialEpcScanSession(partialEpc, safeMatchType);
+        partialEpcScanSession = session;
         try {
-            while (System.currentTimeMillis() < endTime) {
-                UHFTAGInfo scanResult = mReader.readTagFromBuffer();
-                if (scanResult == null || TextUtils.isEmpty(scanResult.getEPC())) {
-                    try {
-                        Thread.sleep(10);
-                    } catch (InterruptedException ignored) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    }
-                    continue;
-                }
-
-                String epc = scanResult.getEPC();
-                if (matchesPartial(epc, partialEpc, safeMatchType) && !uniqueMatches.containsKey(epc)) {
-                    UHFTAGInfo locateTarget = new UHFTAGInfo();
-                    locateTarget.setEPC(epc);
-                    uniqueMatches.put(epc, locateTarget);
-                    matchedRssiByEpc.put(epc, scanResult.getRssi());
-                }
-            }
+            Thread.sleep(safeScanWindowMs);
+        } catch (InterruptedException ignored) {
+            Thread.currentThread().interrupt();
         } finally {
+            partialEpcScanSession = null;
             mReader.stopInventory();
         }
 
-        matchedTags.addAll(uniqueMatches.values());
+        synchronized (session) {
+            matchedTags.addAll(session.uniqueMatches.values());
+            matchedRssiByEpc.putAll(session.rssiByEpc);
+        }
         return matchedTags;
+    }
+
+    /** Accumulates matches for one collectCandidatesByPartialEpc scan window. */
+    private static final class PartialEpcScanSession {
+        final String partialEpc;
+        final String matchType;
+        final Map<String, UHFTAGInfo> uniqueMatches = new LinkedHashMap<>();
+        final Map<String, String> rssiByEpc = new LinkedHashMap<>();
+
+        PartialEpcScanSession(String partialEpc, String matchType) {
+            this.partialEpc = partialEpc;
+            this.matchType = matchType;
+        }
     }
 
     private String pickBestCandidateEpc(List<UHFTAGInfo> candidates) {
@@ -467,12 +565,33 @@ public class UHFHelper {
         }
     }
 
+    // How often we push a fresh tag-list snapshot to Dart while continuously
+    // scanning. Reads land on tagList as fast as the reader buffer produces
+    // them (can be hundreds/sec), but rebuilding+serializing the whole list
+    // on every single read isn't necessary — batching caps that cost to a
+    // fixed rate regardless of how many tags have been found.
+    private static final long EMIT_INTERVAL_MS = 200;
+    private boolean tagListDirty = false;
+
+    private final Runnable emitLoop = new Runnable() {
+        @Override
+        public void run() {
+            emitTagListIfDirty();
+            if (isStart) {
+                handler.postDelayed(this, EMIT_INTERVAL_MS);
+            }
+        }
+    };
+
     /**
      * 添加EPC到列表中
      *
      * @param epc
+     * @param emitImmediately whether to push a snapshot right away (single-read
+     *                        path, where there's no periodic emitLoop running)
+     *                        instead of waiting for the next batched flush.
      */
-    private void addEPCToList(String epc, String rssi) {
+    private void addEPCToList(String epc, String rssi, boolean emitImmediately) {
         if (!TextUtils.isEmpty(epc)) {
             EPC tag = new EPC();
 
@@ -486,25 +605,36 @@ public class UHFHelper {
                 tag.setCount(String.valueOf(tagCount));
             }
             tagList.put(epc, tag);
+            tagListDirty = true;
 
-            final JSONArray jsonArray = new JSONArray();
-
-            for (EPC epcTag : tagList.values()) {
-                JSONObject json = new JSONObject();
-                try {
-                    json.put(TagKey.ID, Objects.requireNonNull(epcTag).getId());
-                    json.put(TagKey.EPC, epcTag.getEpc());
-                    json.put(TagKey.RSSI, epcTag.getRssi());
-                    json.put(TagKey.COUNT, epcTag.getCount());
-                    jsonArray.put(json);
-                } catch (JSONException e) {
-                    e.printStackTrace();
-                }
-
+            if (emitImmediately) {
+                emitTagListIfDirty();
             }
-            uhfListener.onRead(jsonArray.toString());
+        }
+    }
+
+    private void emitTagListIfDirty() {
+        if (!tagListDirty) {
+            return;
+        }
+        tagListDirty = false;
+
+        final JSONArray jsonArray = new JSONArray();
+
+        for (EPC epcTag : tagList.values()) {
+            JSONObject json = new JSONObject();
+            try {
+                json.put(TagKey.ID, Objects.requireNonNull(epcTag).getId());
+                json.put(TagKey.EPC, epcTag.getEpc());
+                json.put(TagKey.RSSI, epcTag.getRssi());
+                json.put(TagKey.COUNT, epcTag.getCount());
+                jsonArray.put(json);
+            } catch (JSONException e) {
+                e.printStackTrace();
+            }
 
         }
+        uhfListener.onRead(jsonArray.toString());
     }
 
     public boolean isEmptyTags() {
@@ -517,31 +647,6 @@ public class UHFHelper {
 
     public boolean isConnected() {
         return isConnect;
-    }
-
-    class TagThread extends Thread {
-        public void run() {
-            String strTid;
-            String strResult;
-            UHFTAGInfo res = null;
-            while (isStart) {
-                res = mReader.readTagFromBuffer();
-                if (res != null) {
-                    strTid = res.getTid();
-                    if (strTid.length() != 0 && !strTid.equals("0000000" +
-                            "000000000") && !strTid.equals("000000000000000000000000")) {
-                        strResult = "TID:" + strTid + "\n";
-                    } else {
-                        strResult = "";
-                    }
-                    Log.i("data", "c" + res.getEPC() + "|" + strResult);
-                    Message msg = handler.obtainMessage();
-                    msg.obj = strResult + "EPC:" + res.getEPC() + "@" + res.getRssi();
-
-                    handler.sendMessage(msg);
-                }
-            }
-        }
     }
 
 }

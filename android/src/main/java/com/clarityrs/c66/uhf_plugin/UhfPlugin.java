@@ -14,7 +14,6 @@ import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler;
 import io.flutter.plugin.common.MethodChannel.Result;
 //import io.flutter.plugin.common.PluginRegistry.Registrar;
-import io.reactivex.Observer;
 import io.reactivex.android.schedulers.AndroidSchedulers;
 import io.reactivex.annotations.NonNull;
 import io.reactivex.disposables.Disposable;
@@ -44,6 +43,12 @@ public class UhfPlugin implements FlutterPlugin, MethodCallHandler, ActivityAwar
     private Context context;
     private Activity activity;
     private Window.Callback originalWindowCallback;
+    private MethodChannel channel;
+    private Disposable connectedStatusDisposable;
+    private Disposable tagsStatusDisposable;
+    private Disposable locateStatusDisposable;
+    private Disposable triggerKeyDisposable;
+    private Disposable barcodeStatusDisposable;
 
     private static final String CHANNEL_IsStarted = "isStarted";
     private static final String CHANNEL_StartSingle = "startSingle";
@@ -82,7 +87,7 @@ public class UhfPlugin implements FlutterPlugin, MethodCallHandler, ActivityAwar
     public void onAttachedToEngine(@NonNull FlutterPluginBinding flutterPluginBinding) {
         this.context = flutterPluginBinding.getApplicationContext();
 
-        final MethodChannel channel = new MethodChannel(flutterPluginBinding.getBinaryMessenger(), "uhf_c66_plugin");
+        channel = new MethodChannel(flutterPluginBinding.getBinaryMessenger(), "uhf_c66_plugin");
         initConnectedEvent(flutterPluginBinding.getBinaryMessenger());
         initReadEvent(flutterPluginBinding.getBinaryMessenger());
         initLocateEvent(flutterPluginBinding.getBinaryMessenger());
@@ -117,172 +122,110 @@ public class UhfPlugin implements FlutterPlugin, MethodCallHandler, ActivityAwar
         });
     }
 
-    private static void initConnectedEvent(BinaryMessenger messenger) {
+    private void initConnectedEvent(BinaryMessenger messenger) {
         final EventChannel scannerEventChannel = new EventChannel(messenger, CHANNEL_ConnectedStatus);
         scannerEventChannel.setStreamHandler(new EventChannel.StreamHandler() {
             @Override
             public void onListen(Object o, final EventChannel.EventSink eventSink) {
-                connectedStatus
+                disposeIfNeeded(connectedStatusDisposable);
+                connectedStatusDisposable = connectedStatus
                         .subscribeOn(Schedulers.newThread())
-                        .observeOn(AndroidSchedulers.mainThread()).subscribe(new Observer<Boolean>() {
-                            @Override
-                            public void onSubscribe(Disposable d) {
-
-                            }
-
-                            @Override
-                            public void onNext(Boolean isConnected) {
-                                eventSink.success(isConnected);
-                            }
-
-                            @Override
-                            public void onError(Throwable e) {
-
-                            }
-
-                            @Override
-                            public void onComplete() {
-
-                            }
-                        });
+                        .observeOn(AndroidSchedulers.mainThread())
+                        .subscribe(eventSink::success, throwable -> {});
             }
 
             @Override
             public void onCancel(Object o) {
-
+                disposeIfNeeded(connectedStatusDisposable);
+                connectedStatusDisposable = null;
             }
         });
     }
 
-    private static void initReadEvent(BinaryMessenger messenger) {
+    private void initReadEvent(BinaryMessenger messenger) {
         final EventChannel scannerEventChannel = new EventChannel(messenger, CHANNEL_TagsStatus);
         scannerEventChannel.setStreamHandler(new EventChannel.StreamHandler() {
             @Override
             public void onListen(Object o, final EventChannel.EventSink eventSink) {
-                tagsStatus
+                disposeIfNeeded(tagsStatusDisposable);
+                tagsStatusDisposable = tagsStatus
                         .subscribeOn(Schedulers.newThread())
-                        .observeOn(AndroidSchedulers.mainThread()).subscribe(new Observer<String>() {
-                            @Override
-                            public void onSubscribe(Disposable d) {
-
-                            }
-
-                            @Override
-                            public void onNext(String tag) {
-                                eventSink.success(tag);
-                            }
-
-                            @Override
-                            public void onError(Throwable e) {
-
-                            }
-
-                            @Override
-                            public void onComplete() {
-
-                            }
-                        });
+                        .observeOn(AndroidSchedulers.mainThread())
+                        .subscribe(eventSink::success, throwable -> {});
             }
 
             @Override
             public void onCancel(Object o) {
-
+                disposeIfNeeded(tagsStatusDisposable);
+                tagsStatusDisposable = null;
             }
         });
     }
 
-    private static void initLocateEvent(BinaryMessenger messenger) {
+    private void initLocateEvent(BinaryMessenger messenger) {
         final EventChannel scannerEventChannel = new EventChannel(messenger, CHANNEL_LocateStatus);
         scannerEventChannel.setStreamHandler(new EventChannel.StreamHandler() {
             @Override
             public void onListen(Object o, final EventChannel.EventSink eventSink) {
-                locateStatus
+                disposeIfNeeded(locateStatusDisposable);
+                locateStatusDisposable = locateStatus
                         .subscribeOn(Schedulers.newThread())
-                        .observeOn(AndroidSchedulers.mainThread()).subscribe(new Observer<String>() {
-                            @Override
-                            public void onSubscribe(Disposable d) {
-
-                            }
-
-                            @Override
-                            public void onNext(String locate) {
-                                eventSink.success(locate);
-                            }
-
-                            @Override
-                            public void onError(Throwable e) {
-
-                            }
-
-                            @Override
-                            public void onComplete() {
-
-                            }
-                        });
+                        .observeOn(AndroidSchedulers.mainThread())
+                        .subscribe(eventSink::success, throwable -> {});
             }
 
             @Override
             public void onCancel(Object o) {
-
+                disposeIfNeeded(locateStatusDisposable);
+                locateStatusDisposable = null;
             }
         });
     }
 
-    private static void initBarcodeEvent(BinaryMessenger messenger) {
+    private void initBarcodeEvent(BinaryMessenger messenger) {
         final EventChannel barcodeEventChannel = new EventChannel(messenger, CHANNEL_BarcodeStatus);
         barcodeEventChannel.setStreamHandler(new EventChannel.StreamHandler() {
             @Override
             public void onListen(Object o, final EventChannel.EventSink eventSink) {
-                barcodeStatus
+                disposeIfNeeded(barcodeStatusDisposable);
+                barcodeStatusDisposable = barcodeStatus
                         .subscribeOn(Schedulers.newThread())
-                        .observeOn(AndroidSchedulers.mainThread()).subscribe(new Observer<Map<String, Object>>() {
-                            @Override public void onSubscribe(Disposable d) {}
-                            @Override public void onNext(Map<String, Object> payload) { eventSink.success(payload); }
-                            @Override public void onError(Throwable e) {}
-                            @Override public void onComplete() {}
-                        });
-            }
-
-            @Override
-            public void onCancel(Object o) {}
-        });
-    }
-
-    private static void initTriggerKeyEvent(BinaryMessenger messenger) {
-        final EventChannel triggerKeyChannel = new EventChannel(messenger, CHANNEL_TriggerKey);
-        triggerKeyChannel.setStreamHandler(new EventChannel.StreamHandler() {
-            @Override
-            public void onListen(Object o, final EventChannel.EventSink eventSink) {
-                triggerKey
-                        .subscribeOn(Schedulers.newThread())
-                        .observeOn(AndroidSchedulers.mainThread()).subscribe(new Observer<Map<String, Object>>() {
-                            @Override
-                            public void onSubscribe(Disposable d) {
-
-                            }
-
-                            @Override
-                            public void onNext(Map<String, Object> payload) {
-                                eventSink.success(payload);
-                            }
-
-                            @Override
-                            public void onError(Throwable e) {
-
-                            }
-
-                            @Override
-                            public void onComplete() {
-
-                            }
-                        });
+                        .observeOn(AndroidSchedulers.mainThread())
+                        .subscribe(eventSink::success, throwable -> {});
             }
 
             @Override
             public void onCancel(Object o) {
-
+                disposeIfNeeded(barcodeStatusDisposable);
+                barcodeStatusDisposable = null;
             }
         });
+    }
+
+    private void initTriggerKeyEvent(BinaryMessenger messenger) {
+        final EventChannel triggerKeyChannel = new EventChannel(messenger, CHANNEL_TriggerKey);
+        triggerKeyChannel.setStreamHandler(new EventChannel.StreamHandler() {
+            @Override
+            public void onListen(Object o, final EventChannel.EventSink eventSink) {
+                disposeIfNeeded(triggerKeyDisposable);
+                triggerKeyDisposable = triggerKey
+                        .subscribeOn(Schedulers.newThread())
+                        .observeOn(AndroidSchedulers.mainThread())
+                        .subscribe(eventSink::success, throwable -> {});
+            }
+
+            @Override
+            public void onCancel(Object o) {
+                disposeIfNeeded(triggerKeyDisposable);
+                triggerKeyDisposable = null;
+            }
+        });
+    }
+
+    private static void disposeIfNeeded(Disposable disposable) {
+        if (disposable != null && !disposable.isDisposed()) {
+            disposable.dispose();
+        }
     }
 
     @Override
@@ -350,8 +293,8 @@ public class UhfPlugin implements FlutterPlugin, MethodCallHandler, ActivityAwar
                 String partialEpc = call.argument("partialEpc");
                 String matchType = call.argument("matchType");
                 Integer scanWindowMs = call.argument("scanWindowMs");
-                result.success(UHFHelper.getInstance(context)
-                        .startFindByPartialEpc(partialEpc, matchType, scanWindowMs == null ? 1500 : scanWindowMs));
+                UHFHelper.getInstance(context).startFindByPartialEpc(partialEpc, matchType,
+                        scanWindowMs == null ? 1500 : scanWindowMs, result::success);
                 break;
             case CHANNEL_StopFindByPartialEpc:
                 result.success(UHFHelper.getInstance(context).stopFindByPartialEpc());
@@ -376,6 +319,24 @@ public class UhfPlugin implements FlutterPlugin, MethodCallHandler, ActivityAwar
 
     @Override
     public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
+        if (channel != null) {
+            channel.setMethodCallHandler(null);
+            channel = null;
+        }
+        // Defensive: EventChannel#onCancel normally disposes these when the
+        // Dart-side stream listener cancels, but an abrupt engine teardown
+        // (hot restart, activity killed mid-scan) can skip that, leaving the
+        // Rx subscription pushing into a detached FlutterJNI/eventSink.
+        disposeIfNeeded(connectedStatusDisposable);
+        disposeIfNeeded(tagsStatusDisposable);
+        disposeIfNeeded(locateStatusDisposable);
+        disposeIfNeeded(triggerKeyDisposable);
+        disposeIfNeeded(barcodeStatusDisposable);
+        connectedStatusDisposable = null;
+        tagsStatusDisposable = null;
+        locateStatusDisposable = null;
+        triggerKeyDisposable = null;
+        barcodeStatusDisposable = null;
     }
 
     // ---- ActivityAware: capture hardware trigger key at the Activity level ----
