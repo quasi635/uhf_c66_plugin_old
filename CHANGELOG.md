@@ -1,3 +1,7 @@
+## 1.5.0
+
+- Imported latest Chainway libs to fix compiling warning on apps that use this plugin
+
 ## 1.4.0
 
 - Fixed `startFindByPartialEpc` blocking the platform thread for the whole scan window, causing dropped UI frames
