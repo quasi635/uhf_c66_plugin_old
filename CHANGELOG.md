@@ -1,3 +1,7 @@
+## 1.5.2
+
+- Update example app to Gradle 9.1.0, AGP 9.0.1 and Kotlin 2.3.20 with built-in Kotlin
+
 ## 1.5.1
 
 - Migrate Android build to built-in Kotlin (AGP 9)

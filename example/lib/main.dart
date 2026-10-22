@@ -511,7 +511,7 @@ class _MyAppState extends State<MyApp> {
                         children: [
                           Expanded(
                             child: DropdownButtonFormField<String>(
-                              value: _partialMatchType,
+                              initialValue: _partialMatchType,
                               decoration: const InputDecoration(labelText: 'Match Type'),
                               items: const [
                                 DropdownMenuItem(value: 'startsWith', child: Text('Starts With')),
