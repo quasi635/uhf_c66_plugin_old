@@ -1,3 +1,8 @@
+## 1.5.1
+
+- Migrate Android build to built-in Kotlin (AGP 9)
+- Update minimum supported SDK to Flutter 3.44 / Dart 3.12 (required for built-in Kotlin migration)
+
 ## 1.5.0
 
 - Imported latest Chainway libs to fix compiling warning on apps that use this plugin
